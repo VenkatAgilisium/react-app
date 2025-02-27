@@ -1,70 +1,49 @@
 pipeline {
     agent any
 
+    parameters {
+        string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS Region')
+        string(name: 'ECR_REPO_NAME', defaultValue: 'my-react-app', description: 'ECR Repository Name')
+        string(name: 'ECS_CLUSTER', defaultValue: 'react-app-cluster', description: 'ECS Cluster Name')
+        string(name: 'ECS_SERVICE', defaultValue: 'frontend-service', description: 'ECS Service Name')
+        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to build')
+    }
+
     environment {
-        SSM_PARAM_PREFIX = '/simple-react-app'  // Prefix for SSM parameters
+        AWS_ACCOUNT_ID = sh(script: "aws sts get-caller-identity --query 'Account' --output text", returnStdout: true).trim()
+        ECR_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO_NAME}"
+        IMAGE_TAG = "${params.GIT_BRANCH}-${BUILD_NUMBER}"
     }
 
     stages {
-        stage('Setup Environment') {
-            steps {
-                script {
-                    // Fetch creds from SSM based on the environemnt
-
-                    SSM_BUCKET_PARAM = "${SSM_PARAM_PREFIX}/${ENVIRONMENT}/s3-bucket"
-                    SSM_REGION_PARAM = "${SSM_PARAM_PREFIX}/${ENVIRONMENT}/aws-region"
-                    S3_BUCKET = sh(script: "aws ssm get-parameter --name ${SSM_BUCKET_PARAM} --query 'Parameter.Value' --output text", returnStdout: true).trim()
-                    AWS_REGION = sh(script: "aws ssm get-parameter --name ${SSM_REGION_PARAM} --query 'Parameter.Value' --output text", returnStdout: true).trim()
-
-                    echo "Deploying to Environment: ${ENVIRONMENT}"
-                    echo "Using S3 Bucket: ${S3_BUCKET}"
-                    echo "Using AWS Region: ${AWS_REGION}"
-                }
-            }
-        }
-
         stage('Checkout Code') {
             steps {
-                git branch: "${BRANCH_NAME}", url: 'https://github.com/VenkatAgilisium/react-app.git'
+                git branch: "${params.GIT_BRANCH}", url: 'https://github.com/VenkatAgilisium/react-app.git'
             }
         }
 
-        stage('Setup Node.js') {
+        stage('Login to AWS ECR') {
             steps {
-                script {
-                    sh "nvm install ${NODE_VERSION}"
-                    sh "nvm use ${NODE_VERSION}"
-                }
+                sh "aws ecr get-login-password --region ${params.AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}"
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Build and Push Docker Image') {
             steps {
-                sh 'npm install'
+                sh """
+                docker build -t ${ECR_REPO}:${IMAGE_TAG} .
+                docker push ${ECR_REPO}:${IMAGE_TAG}
+                """
             }
         }
 
-        stage('Build React App') {
+        stage('Deploy to ECS') {
             steps {
-                sh 'npm run build'
+                sh """
+                aws ecs update-service --cluster ${params.ECS_CLUSTER} --service ${params.ECS_SERVICE} \
+                --force-new-deployment --region ${params.AWS_REGION}
+                """
             }
-        }
-
-        stage('Deploy to S3') {
-            steps {
-                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
-                    sh "aws s3 sync build/ s3://${S3_BUCKET}"
-                }
-            }
-        }
-    }
-
-    post {
-        success {
-            echo "React app successfully deployed to ${ENVIRONMENT} environment!"
-        }
-        failure {
-            echo "Build or deployment failed!"
         }
     }
 }
