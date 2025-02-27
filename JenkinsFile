@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+
+    environment {
+        SSM_PARAM_PREFIX = '/simple-react-app'  // Prefix for SSM parameters
+    }
+
+    stages {
+        stage('Setup Environment') {
+            steps {
+                script {
+                    // Fetch creds from SSM based on the environemnt
+
+                    SSM_BUCKET_PARAM = "${SSM_PARAM_PREFIX}/${ENVIRONMENT}/s3-bucket"
+                    SSM_REGION_PARAM = "${SSM_PARAM_PREFIX}/${ENVIRONMENT}/aws-region"
+                    S3_BUCKET = sh(script: "aws ssm get-parameter --name ${SSM_BUCKET_PARAM} --query 'Parameter.Value' --output text", returnStdout: true).trim()
+                    AWS_REGION = sh(script: "aws ssm get-parameter --name ${SSM_REGION_PARAM} --query 'Parameter.Value' --output text", returnStdout: true).trim()
+
+                    echo "Deploying to Environment: ${ENVIRONMENT}"
+                    echo "Using S3 Bucket: ${S3_BUCKET}"
+                    echo "Using AWS Region: ${AWS_REGION}"
+                }
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: "${BRANCH_NAME}", url: 'https://github.com/VenkatAgilisium/react-app.git'
+            }
+        }
+
+        stage('Setup Node.js') {
+            steps {
+                script {
+                    sh "nvm install ${NODE_VERSION}"
+                    sh "nvm use ${NODE_VERSION}"
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Build React App') {
+            steps {
+                sh 'npm run build'
+            }
+        }
+
+        stage('Deploy to S3') {
+            steps {
+                withAWS(region: "${AWS_REGION}", credentials: 'aws-credentials') {
+                    sh "aws s3 sync build/ s3://${S3_BUCKET}"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "React app successfully deployed to ${ENVIRONMENT} environment!"
+        }
+        failure {
+            echo "Build or deployment failed!"
+        }
+    }
+}
