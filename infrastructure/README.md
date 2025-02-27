@@ -47,3 +47,4 @@ No requirements.
 | Name | Description |
 |------|-------------|
 | <a name="output_alb_dns_name"></a> [alb\_dns\_name](#output\_alb\_dns\_name) | The DNS name of the Application Load Balancer |
+| <a name="output_route53_fqdn"></a> [route53\_fqdn](#output\_route53\_fqdn) | Fully Qualified Domain Name (FQDN) from Route 53 |
