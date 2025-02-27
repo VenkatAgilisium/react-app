@@ -32,41 +32,47 @@ module "alb" {
   subnets            = module.vpc.public_subnets
 }
 
-# Create an ECS Fargate Service
-module "ecs_service" {
-  source  = "terraform-aws-modules/ecs/aws//modules/service"
-  version = "5.6.0"
+# SG for Fargate tasks to allow traffic only from ALB
+resource "aws_security_group" "ecs_sg" {
+  name_prefix = "ecs-sg-${var.env}"
+  description = "ECS Fargate Security Group for React App"
+  vpc_id      = module.vpc.vpc_id
 
-  name        = "${var.name}-${local.environment}-service"
-  cluster_arn = module.ecs_cluster.cluster_arn
-
-  task_definition = {
-    family                   = "nginx-task"
-    container_definitions    = jsonencode([
-      {
-        name      = "nginx"
-        image     = "nginx:latest"
-        cpu       = 256
-        memory    = 512
-        essential = true
-        portMappings = [
-          {
-            containerPort = 80
-            hostPort      = 80
-          }
-        ]
-      }
-    ])
-    requires_compatibilities = ["FARGATE"]
-    network_mode             = "awsvpc"
-    cpu                      = 256
-    memory                   = 512
+  ingress {
+    description     = "Allow traffic only from ALB"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
   }
 
-  desired_count = 2
+  egress {
+    description = "Allow outbound traffic (e.g., API calls, DB, external services)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
 
-  subnet_ids          = module.vpc.public_subnets
-  security_group_ids  = [module.alb.security_group_id]
+# Create an ECS Fargate Service
+resource "aws_ecs_service" "react_app" {
+  name            = "react-app-${var.env}"
+  cluster         = aws_ecs_cluster.react_app.id
+  desired_count   = 2
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = module.vpc.private_subnets  
+    security_groups  = [aws_security_group.ecs_sg.id]  
+    assign_public_ip = false 
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.react_app.arn
+    container_name   = "react-app"
+    container_port   = 80
+  }
 }
 
 resource "aws_route53_record" "react_app_dns" {
